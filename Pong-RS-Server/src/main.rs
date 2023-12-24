@@ -20,8 +20,8 @@ struct GameStateRecieve {
 struct GameStateSend {
     P_position_x: u16,
     P_position_y: u16,
-    Pongball_position_x: u16,
-    Pongball_position_y: u16,
+    Pongball_position_x: i32,
+    Pongball_position_y: i32,
     P_score: u16,
 }
 
@@ -72,7 +72,6 @@ impl Player {
 	}
 }
 
-// terminal screen
 struct GameData {
 	player: Player,
 	opponent: Player,
@@ -108,7 +107,7 @@ fn handle_client(mut stream: TcpStream, p: u8, game_state: &Arc<Mutex<GameData>>
             .expect("Failed to deserialize JSON data");
 
         // Process the received data
-        println!("Received data: {:?}", received_data);
+        // println!("Received data: {:?}", received_data);
 
         if (p == 0) {
             let mut game = game_state.lock().unwrap();
@@ -196,6 +195,9 @@ fn main() {
                     handle_client(stream, i, &game_state);
                 });
                 i += 1;
+                if (i == 1) {
+                    break;
+                }
             }
             Err(e) => {
                 eprintln!("Error accepting connection: {}", e);
@@ -206,7 +208,7 @@ fn main() {
     // Infinite loop for sending (128 times per second)
     let send_interval = Duration::from_micros(1_000_000 / 128); // 1 second / 128
     let mut last_send_time = Instant::now();
-    
+    println!("HERE");
     loop {
         // Your sending logic goes here
         let mut i = 0;
@@ -215,7 +217,7 @@ fn main() {
 
             
             // calculate ball position
-            pong_controls(&game_state, Rect{height: 35, width: 64});
+            pong_controls(&game_state, Rect{height: 64, width: 34});
 
             let response_data = game_state.lock().unwrap();
 
@@ -223,8 +225,8 @@ fn main() {
                 let gameStateSend = GameStateSend{
                     P_position_x: response_data.player.x,
                     P_position_y: response_data.player.y,
-                    Pongball_position_x: response_data.pongball.x as u16,
-                    Pongball_position_y: response_data.pongball.y as u16,
+                    Pongball_position_x: response_data.pongball.x,
+                    Pongball_position_y: response_data.pongball.y,
                     P_score: response_data.player.score,
                 };
                 // Serialize the response data to JSON
@@ -237,8 +239,8 @@ fn main() {
                 let gameStateSend = GameStateSend{
                     P_position_x: response_data.opponent.x,
                     P_position_y: response_data.opponent.y,
-                    Pongball_position_x: response_data.pongball.x as u16,
-                    Pongball_position_y: response_data.pongball.y as u16,
+                    Pongball_position_x: response_data.pongball.x,
+                    Pongball_position_y: response_data.pongball.y,
                     P_score: response_data.opponent.score,
                 };
                 // Serialize the response data to JSON

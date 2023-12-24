@@ -5,6 +5,14 @@ use crossterm::{
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}
 };
 use ratatui::{prelude::*, widgets::*};
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write};
+use std::time::{Duration, Instant};
+use std::thread::sleep;
+
+
 
 struct Player {
 	score: u16,
@@ -63,6 +71,25 @@ impl GameData {
 			pongball: PongBall::new(t_width, t_height),
 		}
 	}
+}
+
+// Updated struct for your JSON data
+#[derive(Debug, Serialize, Deserialize)]
+struct GameStateSend {
+    P_position_x: u16,
+    P_position_y: u16,
+    P_score: u16,
+    screen_size_x: u16,
+    screen_size_y: u16,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GameStateRecieve {
+    P_position_x: u16,
+    P_position_y: u16,
+    Pongball_position_x: u16,
+    Pongball_position_y: u16,
+    P_score: u16,
 }
 
 fn handle_events(gameData: &mut GameData, t_size: Rect) -> io::Result<bool> {
@@ -143,6 +170,45 @@ fn pong_controls(gameData: &mut GameData, t_size: Rect) {
 	}
 }
 
+fn handle_server_recieve(stream: &mut TcpStream, gameDataT: &Arc<Mutex<GameData>>) {
+	let send_interval = Duration::from_micros(1_000_000 / 128); // 1 second / 128
+    let mut last_send_time = Instant::now();
+
+    loop {
+
+        // Buffer to store incoming data
+        let mut buffer = [0; 1024];
+
+        // Read data from the client
+        let bytes_read = stream.read(&mut buffer).expect("Failed to read from client");
+
+        // Deserialize the JSON data
+        let received_data: GameStateRecieve = serde_json::from_slice(&buffer[..bytes_read])
+            .expect("Failed to deserialize JSON data");
+
+        // Process the received data
+        println!("Received data: {:?}", received_data);
+        
+		let mut game = gameDataT.lock().unwrap();
+		game.opponent.x = received_data.P_position_x;
+		game.opponent.y = received_data.P_position_y;
+		game.opponent.score = received_data.P_score;
+		game.pongball.x = received_data.Pongball_position_x as i32;
+		game.pongball.y = received_data.Pongball_position_y as i32;
+
+        // Calculate the elapsed time since the last send
+        let elapsed = last_send_time.elapsed();
+
+        // If less time has passed than the desired interval, sleep to reach the interval
+        if elapsed < send_interval {
+            sleep(send_interval - elapsed);
+        }
+
+        // Update the last send time for the next iteration
+        last_send_time = Instant::now();
+    }
+}
+
 fn run() -> io::Result<()> {
 	enable_raw_mode()?;
 	stdout().execute(EnterAlternateScreen)?;
@@ -150,10 +216,40 @@ fn run() -> io::Result<()> {
 	//Save frame dimentions
 	let mut currentFrameSize: Rect = terminal.get_frame().size();
 
-	let mut gameData: GameData = GameData::new(terminal.get_frame().size().width, terminal.get_frame().size().height);
+	// let mut gameDataT: Arc<Mutex<GameData>> = Arc::new(Mutex::new(GameData::new(terminal.get_frame().size().width, terminal.get_frame().size().height)));
+	let mut gameData = GameData::new(terminal.get_frame().size().width, terminal.get_frame().size().height);
+	let mut stream = TcpStream::connect("127.0.0.1:25565").unwrap(); // Replace with the server address and port
+	
+	// let gameData = Arc::clone(&gameDataT);
+
+	// let mut streamclone = stream.try_clone().expect("failed to clone");
+	// std::thread::spawn(move || {
+	// 	handle_server_recieve( &mut streamclone, &gameData);
+	// });
 
 	let mut should_quit = false;
 	while !should_quit {
+		// let mut gameData = gameDataT.lock().unwrap();
+
+		let mut buffer = [0; 1024];
+
+        // Read data from the client
+        let bytes_read = stream.read(&mut buffer).expect("Failed to read from client");
+
+        // Deserialize the JSON data
+        let received_data: GameStateRecieve = serde_json::from_slice(&buffer[..bytes_read])
+            .expect("Failed to deserialize JSON data");
+
+        // Process the received data
+        println!("Received data: {:?}", received_data);
+        
+		// let mut game = gameDataT.lock().unwrap();
+		gameData.opponent.x = received_data.P_position_x;
+		gameData.opponent.y = received_data.P_position_y;
+		gameData.opponent.score = received_data.P_score;
+		gameData.pongball.x = received_data.Pongball_position_x as i32;
+		gameData.pongball.y = received_data.Pongball_position_y as i32;
+
 		//Check terminal size change
 		handle_terminal_size_change(&mut currentFrameSize, &mut gameData, terminal.get_frame().size());
 
@@ -192,7 +288,16 @@ fn run() -> io::Result<()> {
 		})?;
 		
 		// Pong Controls
-		pong_controls(&mut gameData, terminal.get_frame().size());
+		// pong_controls(&mut gameData, terminal.get_frame().size());
+
+		let mut sendData: GameStateSend = GameStateSend{P_position_x: gameData.player.x,
+														P_position_y: gameData.player.y,
+														P_score: gameData.player.score,
+														screen_size_x: terminal.get_frame().size().width,
+														screen_size_y: terminal.get_frame().size().height};
+		let response_json = serde_json::to_vec(&sendData).expect("Failed to serialize JSON data");
+		
+		stream.write_all(&response_json).expect("Failed to write to client");
 
 		should_quit = handle_events(&mut gameData, terminal.get_frame().size())?;
 	}
