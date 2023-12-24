@@ -123,11 +123,6 @@ fn pong_controls(gameData: &mut GameData, t_size: Rect) {
 			gameData.pongball.direction_y *= -1;
 		}
 
-		//Checking if hit the paddles
-		// if (gameData.pongball.x == 2 || gameData.pongball.x == t_size.width as i32 - 2) {
-		// 	gameData.pongball.direction_x *= -1;
-		// }
-
 		if (gameData.pongball.x == 4 && (gameData.pongball.y >= gameData.player.y as i32 && gameData.pongball.y <= (gameData.player.y + gameData.player.height) as i32 )) {
 			gameData.pongball.direction_x *= -1;
 		}
@@ -136,12 +131,12 @@ fn pong_controls(gameData: &mut GameData, t_size: Rect) {
 		}
 
 		if (gameData.pongball.x == 0) {
-			gameData.player.score += 1;
+			gameData.opponent.score += 1;
 			gameData.pongball.x = t_size.width as i32 /2;
 			gameData.pongball.y = t_size.height as i32 /2;
 		}
 		if (gameData.pongball.x == t_size.width as i32 - 1) {
-			gameData.opponent.score += 1;
+			gameData.player.score += 1;
 			gameData.pongball.x = t_size.width as i32 /2;
 			gameData.pongball.y = t_size.height as i32 /2; 
 		}
@@ -190,12 +185,12 @@ fn run() -> io::Result<()> {
 
 			//Draw pong
 			let pong = Paragraph::new("o").alignment(Alignment::Center).fg(Color::White);
-			// let pong = Block::default().borders(Borders::NONE).bg(Color::Red);
 			frame.render_widget(pong, Rect {	 x: gameData.pongball.x as u16,
 															y: gameData.pongball.y as u16,
 															width: 1,
 															height: 1});
 		})?;
+		
 		// Pong Controls
 		pong_controls(&mut gameData, terminal.get_frame().size());
 
