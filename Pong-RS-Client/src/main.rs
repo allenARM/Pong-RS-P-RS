@@ -12,7 +12,9 @@ use std::net::TcpStream;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::io::{ErrorKind, Read, Write};
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct Player {
 	score: u16,
 	x: u16,
@@ -21,6 +23,7 @@ struct Player {
 	height: u16,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct PongBall {
 	x: i32,
 	y: i32,
@@ -28,6 +31,12 @@ struct PongBall {
 	height: u16,
 	direction_x: i32,
 	direction_y: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct sendData {
+	oponent: Player,
+	pongball: PongBall
 }
 
 impl PongBall {
@@ -41,6 +50,17 @@ impl PongBall {
 			direction_y: 1,
 		}
 	}
+
+	fn clone(&self) -> Self {
+        Self {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+            direction_x: self.direction_x,
+            direction_y: self.direction_y,
+        }
+    }
 }
 
 impl Player {
@@ -53,6 +73,16 @@ impl Player {
 			height: height,
 		}
 	}
+
+	fn clone(&self) -> Self {
+        Self {
+            score: self.score,
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 // terminal screen
@@ -70,36 +100,47 @@ impl GameData {
 			pongball: PongBall::new(t_width, t_height),
 		}
 	}
+	fn clone(&self) -> Self {
+        Self {
+            player: self.player.clone(),
+            opponent: self.opponent.clone(),
+            pongball: self.pongball.clone(),
+        }
+    }
 }
 
-fn handle_events(gameData: &mut GameData, t_size: Rect) -> io::Result<bool> {
+fn handle_events(gameData: &mut GameData, t_size: Rect, server: i32) -> io::Result<bool> {
 	if event::poll(std::time::Duration::from_millis(30))? {
 		if let Event::Key(key) = event::read()? {
 			if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') {
 				return Ok(true);
 			}
 
-			//Player Controls
-			if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up {
-				if (gameData.player.y > 1) {
-					gameData.player.y -= 1;
+			//Player/Client Controls
+			if (server == 0) {
+				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up {
+					if (gameData.player.y > 1) {
+						gameData.player.y -= 1;
+					}
 				}
-			}
-			if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down {
-				if (gameData.player.y < t_size.height-gameData.player.height-1) {
-					gameData.player.y += 1;
+				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down {
+					if (gameData.player.y < t_size.height-gameData.player.height-1) {
+						gameData.player.y += 1;
+					}
 				}
 			}
 
-			//Player Controls
-			if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('w') {
-				if (gameData.opponent.y > 1) {
-					gameData.opponent.y -= 1;
+			//Player/Server Controls
+			if (server == 1) {
+				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('w') {
+					if (gameData.opponent.y > 1) {
+						gameData.opponent.y -= 1;
+					}
 				}
-			}
-			if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('s') {
-				if (gameData.opponent.y < t_size.height-gameData.opponent.height-1) {
-					gameData.opponent.y += 1;
+				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('s') {
+					if (gameData.opponent.y < t_size.height-gameData.opponent.height-1) {
+						gameData.opponent.y += 1;
+					}
 				}
 			}
 	   }
@@ -159,7 +200,7 @@ fn runServer() -> io::Result<()> {
 	let server = TcpListener::bind(LOCAL).expect("Listener failed to bind");
 	server.set_nonblocking(true).expect("failed to initialize non-blocking");
 
-	let mut clients = vec![];
+	// let mut clients = vec![];
 	let (tx, rx) = mpsc::channel::<String>();
 
 
@@ -179,17 +220,19 @@ fn runServer() -> io::Result<()> {
 			println!("Client {} connected", addr);
 
 			let tx = tx.clone();
-			clients.push(socket.try_clone().expect("failed to clone client"));
+			// clients.push(socket.try_clone().expect("failed to clone client"));
 
+			let newGameData = gameData.clone();
 			thread::spawn(move || loop {
 				let mut buff = vec![0; MSG_SIZE];
 
 				match socket.read_exact(&mut buff) {
 					Ok(_) => {
-						let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-						let msg = String::from_utf8(msg).expect("Invalid utf8 message");
-
-						println!("{}: {:?}", addr, msg);
+						// let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
+						// let msg = String::from_utf8(msg).expect("Invalid utf8 message");
+						let dataToSend: sendData = sendData{ oponent: newGameData.opponent.clone(), pongball: newGameData.pongball.clone()};
+						let msg = serde_json::to_string(&dataToSend).unwrap();
+						// println!("{}: {:?}", addr, msg);
 						tx.send(msg).expect("failed to send msg to rx");
 					}, 
 					Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
@@ -202,12 +245,10 @@ fn runServer() -> io::Result<()> {
 		}
 
 		if let Ok(msg) = rx.try_recv() {
-			clients = clients.into_iter().filter_map(|mut client| {
-				let mut buff = msg.clone().into_bytes();
-				buff.resize(MSG_SIZE, 0);
-
-				client.write_all(&buff).map(|_| client).ok()
-			}).collect::<Vec<_>>();
+			// let mut buff = msg.clone().into_bytes();
+			// buff.resize(MSG_SIZE, 0);
+			let deserializedMsg: Player = serde_json::from_str(&msg).unwrap();
+			gameData.opponent = deserializedMsg;
 		}
 
 
@@ -251,7 +292,7 @@ fn runServer() -> io::Result<()> {
 		// Pong Controls
 		pong_controls(&mut gameData, terminal.get_frame().size());
 
-		should_quit = handle_events(&mut gameData, terminal.get_frame().size())?;
+		should_quit = handle_events(&mut gameData, terminal.get_frame().size(), 1)?;
 	}
 
 	disable_raw_mode()?;
@@ -261,6 +302,11 @@ fn runServer() -> io::Result<()> {
 
 fn runClient() -> io::Result<()> {
 	
+	let mut client = TcpStream::connect(LOCAL).expect("Stream failed to connect");
+	client.set_nonblocking(true).expect("failed to initiate non-blocking");
+
+	let (tx, rx) = mpsc::channel::<String>();
+
 	enable_raw_mode()?;
 	stdout().execute(EnterAlternateScreen)?;
 	let mut terminal: Terminal<CrosstermBackend<io::Stdout>> = Terminal::new(CrosstermBackend::new(stdout()))?;
@@ -271,6 +317,26 @@ fn runClient() -> io::Result<()> {
 
 	let mut should_quit = false;
 	while !should_quit {
+		//connection to the server
+		let mut client = client.try_clone().expect("failed clone");
+		let gameDataClone = gameData.clone();
+		// let txClone = tx.clone();
+		thread::spawn(move || loop {
+			let mut buff = vec![0; MSG_SIZE];
+			let msg = serde_json::to_string(&gameDataClone.player).unwrap();
+			// client.write_all(&serialized);
+			// tx.send(msg).expect("failed to send msg to rx");
+			client.write_all(&msg.as_bytes()).expect("failed to send");
+
+		});
+		if let Ok(msg) = rx.try_recv() {
+			// let mut buff = msg.clone().into_bytes();
+			// buff.resize(MSG_SIZE, 0);
+			let deserializedMsg: sendData = serde_json::from_str(&msg).unwrap();
+			gameData.opponent = deserializedMsg.oponent;
+			gameData.pongball = deserializedMsg.pongball;
+		}
+
 		//Check terminal size change
 		handle_terminal_size_change(&mut currentFrameSize, &mut gameData, terminal.get_frame().size());
 
@@ -311,7 +377,7 @@ fn runClient() -> io::Result<()> {
 		// Pong Controls
 		// pong_controls(&mut gameData, terminal.get_frame().size());
 
-		should_quit = handle_events(&mut gameData, terminal.get_frame().size())?;
+		should_quit = handle_events(&mut gameData, terminal.get_frame().size(), 0)?;
 	}
 
 	disable_raw_mode()?;
@@ -320,9 +386,9 @@ fn runClient() -> io::Result<()> {
 }
 
 
-const LOCAL: &str = "127.0.0.1";
+const LOCAL: &str = "127.0.0.1:25565";
 const DEFAULT_PORT: &str = "25565";
-const MSG_SIZE: usize = 128;
+const MSG_SIZE: usize = 2048;
 
 fn sleep() {
     thread::sleep(::std::time::Duration::from_millis(100));
@@ -342,88 +408,5 @@ fn main() -> io::Result<()> {
 	if (args.len() == 2) {
 		runClient();
 	}
-	// if (args.len() == 2) {
-	// 	let server = TcpListener::bind(LOCAL).expect("Listener failed to bind");
-	// 	server.set_nonblocking(true).expect("failed to initialize non-blocking");
-
-	// 	let mut clients = vec![];
-	// 	let (tx, rx) = mpsc::channel::<String>();
-	// 	loop {
-	// 		if let Ok((mut socket, addr)) = server.accept() {
-	// 			println!("Client {} connected", addr);
-
-	// 			let tx = tx.clone();
-	// 			clients.push(socket.try_clone().expect("failed to clone client"));
-
-	// 			thread::spawn(move || loop {
-	// 				let mut buff = vec![0; MSG_SIZE];
-
-	// 				match socket.read_exact(&mut buff) {
-	// 					Ok(_) => {
-	// 						let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-	// 						let msg = String::from_utf8(msg).expect("Invalid utf8 message");
-
-	// 						println!("{}: {:?}", addr, msg);
-	// 						tx.send(msg).expect("failed to send msg to rx");
-	// 					}, 
-	// 					Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
-	// 					Err(_) => {
-	// 						println!("closing connection with: {}", addr);
-	// 						break;
-	// 					}
-	// 				}
-
-	// 				sleep();
-	// 			});
-	// 		}
-
-	// 		if let Ok(msg) = rx.try_recv() {
-	// 			clients = clients.into_iter().filter_map(|mut client| {
-	// 				let mut buff = msg.clone().into_bytes();
-	// 				buff.resize(MSG_SIZE, 0);
-
-	// 				client.write_all(&buff).map(|_| client).ok()
-	// 			}).collect::<Vec<_>>();
-	// 		}
-
-	// 		sleep();
-	// 	}
-	// }
-
-	if (args.len() == 3) {
-		let mut client = TcpStream::connect(LOCAL).expect("Stream failed to connect");
-		client.set_nonblocking(true).expect("failed to initiate non-blocking");
-
-		let (tx, rx) = mpsc::channel::<String>();
-		
-		thread::spawn(move || loop {
-			let mut buff = vec![0; MSG_SIZE];
-			match client.read_exact(&mut buff) {
-				Ok(_) => {
-					let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-					println!("message recv {:?}", msg);
-				},
-				Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
-				Err(_) => {
-					println!("connection with server was severed");
-					break;
-				}
-			}
-	
-			match rx.try_recv() {
-				Ok(msg) => {
-					let mut buff = msg.clone().into_bytes();
-					buff.resize(MSG_SIZE, 0);
-					client.write_all(&buff).expect("writing to socket failed");
-					println!("message sent {:?}", msg);
-				}, 
-				Err(TryRecvError::Empty) => (),
-				Err(TryRecvError::Disconnected) => break
-			}
-	
-			thread::sleep(Duration::from_millis(100));
-		});
-	}
-	// run()?;
 	Ok(())
 }
