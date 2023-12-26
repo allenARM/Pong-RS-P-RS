@@ -1,10 +1,17 @@
-use std::{io::{self, stdout}, ops::Add};
+use std::{io::{self, stdout}, ops::Add, time::Duration};
 use crossterm::{
 	event::{self, Event, KeyCode},
 	ExecutableCommand,
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}
 };
 use ratatui::{prelude::*, widgets::*};
+use std::env;
+use std::net::TcpListener;
+use std::net::TcpStream;
+// use std::sync::mpsc;
+use std::sync::mpsc::{self, TryRecvError};
+use std::thread;
+use std::io::{ErrorKind, Read, Write};
 
 struct Player {
 	score: u16,
@@ -148,7 +155,15 @@ fn pong_controls(gameData: &mut GameData, t_size: Rect) {
 	}
 }
 
-fn run() -> io::Result<()> {
+fn runServer() -> io::Result<()> {
+	let server = TcpListener::bind(LOCAL).expect("Listener failed to bind");
+	server.set_nonblocking(true).expect("failed to initialize non-blocking");
+
+	let mut clients = vec![];
+	let (tx, rx) = mpsc::channel::<String>();
+
+
+
 	enable_raw_mode()?;
 	stdout().execute(EnterAlternateScreen)?;
 	let mut terminal: Terminal<CrosstermBackend<io::Stdout>> = Terminal::new(CrosstermBackend::new(stdout()))?;
@@ -159,6 +174,43 @@ fn run() -> io::Result<()> {
 
 	let mut should_quit = false;
 	while !should_quit {
+		//server
+		if let Ok((mut socket, addr)) = server.accept() {
+			println!("Client {} connected", addr);
+
+			let tx = tx.clone();
+			clients.push(socket.try_clone().expect("failed to clone client"));
+
+			thread::spawn(move || loop {
+				let mut buff = vec![0; MSG_SIZE];
+
+				match socket.read_exact(&mut buff) {
+					Ok(_) => {
+						let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
+						let msg = String::from_utf8(msg).expect("Invalid utf8 message");
+
+						println!("{}: {:?}", addr, msg);
+						tx.send(msg).expect("failed to send msg to rx");
+					}, 
+					Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
+					Err(_) => {
+						println!("closing connection with: {}", addr);
+						break;
+					}
+				}
+			});
+		}
+
+		if let Ok(msg) = rx.try_recv() {
+			clients = clients.into_iter().filter_map(|mut client| {
+				let mut buff = msg.clone().into_bytes();
+				buff.resize(MSG_SIZE, 0);
+
+				client.write_all(&buff).map(|_| client).ok()
+			}).collect::<Vec<_>>();
+		}
+
+
 		//Check terminal size change
 		handle_terminal_size_change(&mut currentFrameSize, &mut gameData, terminal.get_frame().size());
 
@@ -207,7 +259,171 @@ fn run() -> io::Result<()> {
 	Ok(())
 }
 
-fn main() -> io::Result<()>{
-	run()?;
+fn runClient() -> io::Result<()> {
+	
+	enable_raw_mode()?;
+	stdout().execute(EnterAlternateScreen)?;
+	let mut terminal: Terminal<CrosstermBackend<io::Stdout>> = Terminal::new(CrosstermBackend::new(stdout()))?;
+	//Save frame dimentions
+	let mut currentFrameSize: Rect = terminal.get_frame().size();
+
+	let mut gameData: GameData = GameData::new(terminal.get_frame().size().width, terminal.get_frame().size().height);
+
+	let mut should_quit = false;
+	while !should_quit {
+		//Check terminal size change
+		handle_terminal_size_change(&mut currentFrameSize, &mut gameData, terminal.get_frame().size());
+
+		terminal.draw( | frame | {
+			//Draw title and borders around
+			let x = frame.size().width.to_string().add("x").add(frame.size().height.to_string().as_str());
+			frame.render_widget(Block::default().title_alignment(Alignment::Center).title(	" P1: ".to_string() +
+																									&gameData.player.score.to_string() +
+																									&" ---Welcome to Pong-RS/P-RS--- ".to_string() +
+																									&x +
+																									&" P2: ".to_string() +
+																									&gameData.opponent.score.to_string() +
+																									&" ".to_string()).borders(Borders::ALL).fg(Color::Cyan), frame.size());			
+
+
+			//Draw first player
+			let p1 = Block::default().borders(Borders::NONE).bg(Color::LightGreen);
+			frame.render_widget(p1, Rect { x: gameData.player.x as u16, 
+														y: gameData.player.y as u16,
+														width: gameData.player.width as u16,
+														height: gameData.player.height as u16 });
+
+			//Draw second player
+			let p2 = Block::default().borders(Borders::NONE).bg(Color::LightMagenta);
+			frame.render_widget(p2, Rect { x: gameData.opponent.x as u16,
+														y: gameData.opponent.y as u16,
+														width: gameData.opponent.width as u16,
+														height: gameData.opponent.height as u16 });
+
+			//Draw pong
+			let pong = Paragraph::new("o").alignment(Alignment::Center).fg(Color::White);
+			// let pong = Block::default().borders(Borders::NONE).bg(Color::Red);
+			frame.render_widget(pong, Rect {	 x: gameData.pongball.x as u16,
+															y: gameData.pongball.y as u16,
+															width: 1,
+															height: 1});
+		})?;
+		// Pong Controls
+		// pong_controls(&mut gameData, terminal.get_frame().size());
+
+		should_quit = handle_events(&mut gameData, terminal.get_frame().size())?;
+	}
+
+	disable_raw_mode()?;
+	stdout().execute(LeaveAlternateScreen)?;
+	Ok(())
+}
+
+
+const LOCAL: &str = "127.0.0.1";
+const DEFAULT_PORT: &str = "25565";
+const MSG_SIZE: usize = 128;
+
+fn sleep() {
+    thread::sleep(::std::time::Duration::from_millis(100));
+}
+
+fn main() -> io::Result<()> {
+	let args: Vec<String> = env::args().collect();
+
+	// default port 25565
+	// program runs "cargo run ip port" to connect to the server
+	// or "cargo run port" to start the server 
+
+	//start the server
+	if (args.len() == 1) {
+		runServer();
+	}
+	if (args.len() == 2) {
+		runClient();
+	}
+	// if (args.len() == 2) {
+	// 	let server = TcpListener::bind(LOCAL).expect("Listener failed to bind");
+	// 	server.set_nonblocking(true).expect("failed to initialize non-blocking");
+
+	// 	let mut clients = vec![];
+	// 	let (tx, rx) = mpsc::channel::<String>();
+	// 	loop {
+	// 		if let Ok((mut socket, addr)) = server.accept() {
+	// 			println!("Client {} connected", addr);
+
+	// 			let tx = tx.clone();
+	// 			clients.push(socket.try_clone().expect("failed to clone client"));
+
+	// 			thread::spawn(move || loop {
+	// 				let mut buff = vec![0; MSG_SIZE];
+
+	// 				match socket.read_exact(&mut buff) {
+	// 					Ok(_) => {
+	// 						let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
+	// 						let msg = String::from_utf8(msg).expect("Invalid utf8 message");
+
+	// 						println!("{}: {:?}", addr, msg);
+	// 						tx.send(msg).expect("failed to send msg to rx");
+	// 					}, 
+	// 					Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
+	// 					Err(_) => {
+	// 						println!("closing connection with: {}", addr);
+	// 						break;
+	// 					}
+	// 				}
+
+	// 				sleep();
+	// 			});
+	// 		}
+
+	// 		if let Ok(msg) = rx.try_recv() {
+	// 			clients = clients.into_iter().filter_map(|mut client| {
+	// 				let mut buff = msg.clone().into_bytes();
+	// 				buff.resize(MSG_SIZE, 0);
+
+	// 				client.write_all(&buff).map(|_| client).ok()
+	// 			}).collect::<Vec<_>>();
+	// 		}
+
+	// 		sleep();
+	// 	}
+	// }
+
+	if (args.len() == 3) {
+		let mut client = TcpStream::connect(LOCAL).expect("Stream failed to connect");
+		client.set_nonblocking(true).expect("failed to initiate non-blocking");
+
+		let (tx, rx) = mpsc::channel::<String>();
+		
+		thread::spawn(move || loop {
+			let mut buff = vec![0; MSG_SIZE];
+			match client.read_exact(&mut buff) {
+				Ok(_) => {
+					let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
+					println!("message recv {:?}", msg);
+				},
+				Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
+				Err(_) => {
+					println!("connection with server was severed");
+					break;
+				}
+			}
+	
+			match rx.try_recv() {
+				Ok(msg) => {
+					let mut buff = msg.clone().into_bytes();
+					buff.resize(MSG_SIZE, 0);
+					client.write_all(&buff).expect("writing to socket failed");
+					println!("message sent {:?}", msg);
+				}, 
+				Err(TryRecvError::Empty) => (),
+				Err(TryRecvError::Disconnected) => break
+			}
+	
+			thread::sleep(Duration::from_millis(100));
+		});
+	}
+	// run()?;
 	Ok(())
 }
