@@ -13,6 +13,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::io::{ErrorKind, Read, Write};
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Player {
@@ -226,21 +227,18 @@ fn runServer() -> io::Result<()> {
 			thread::spawn(move || loop {
 				let mut buff = vec![0; MSG_SIZE];
 
-				match socket.read_exact(&mut buff) {
-					Ok(_) => {
-						// let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-						// let msg = String::from_utf8(msg).expect("Invalid utf8 message");
-						let dataToSend: sendData = sendData{ oponent: newGameData.opponent.clone(), pongball: newGameData.pongball.clone()};
-						let msg = serde_json::to_string(&dataToSend).unwrap();
-						// println!("{}: {:?}", addr, msg);
-						tx.send(msg).expect("failed to send msg to rx");
-					}, 
-					Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
-					Err(_) => {
-						println!("closing connection with: {}", addr);
-						break;
-					}
-				}
+					// let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
+					// let msg = String::from_utf8(msg).expect("Invalid utf8 message");
+					// let dataToSend: sendData = sendData{ oponent: newGameData.opponent.clone(), pongball: newGameData.pongball.clone()};
+					// let msg = serde_json::to_string(&dataToSend).unwrap();
+					// println!("{}: {:?}", addr, msg);
+					let dataToSend: sendData = sendData {
+						oponent: newGameData.opponent.clone(),
+						pongball: newGameData.pongball.clone(),
+					};
+					let msg = serde_json::to_string(&dataToSend).unwrap();
+					
+					tx.send(msg).expect("failed to send msg to rx");
 			});
 		}
 
@@ -306,6 +304,7 @@ fn runClient() -> io::Result<()> {
 	client.set_nonblocking(true).expect("failed to initiate non-blocking");
 
 	let (tx, rx) = mpsc::channel::<String>();
+	let tx = Mutex::new(tx);
 
 	enable_raw_mode()?;
 	stdout().execute(EnterAlternateScreen)?;
@@ -316,24 +315,29 @@ fn runClient() -> io::Result<()> {
 	let mut gameData: GameData = GameData::new(terminal.get_frame().size().width, terminal.get_frame().size().height);
 
 	let mut should_quit = false;
+	
 	while !should_quit {
 		//connection to the server
 		let mut client = client.try_clone().expect("failed clone");
 		let gameDataClone = gameData.clone();
-		// let txClone = tx.clone();
+		let tx_clone = tx.lock().unwrap().clone();
+
 		thread::spawn(move || loop {
-			let mut buff = vec![0; MSG_SIZE];
-			let msg = serde_json::to_string(&gameDataClone.player).unwrap();
+			// let mut buff = vec![0; MSG_SIZE];
+			let msg = serde_json::to_string(&gameDataClone.opponent).unwrap();
 			// client.write_all(&serialized);
 			// tx.send(msg).expect("failed to send msg to rx");
-			client.write_all(&msg.as_bytes()).expect("failed to send");
-
+			// client.write_all(&msg.as_bytes()).expect("failed to send");
+			tx_clone.send(msg).expect("error");
 		});
 		if let Ok(msg) = rx.try_recv() {
 			// let mut buff = msg.clone().into_bytes();
 			// buff.resize(MSG_SIZE, 0);
+			// let deserializedMsg: sendData = serde_json::from_str(&msg).unwrap();
+			// gameData.player = deserializedMsg.oponent;
+			// gameData.pongball = deserializedMsg.pongball;
 			let deserializedMsg: sendData = serde_json::from_str(&msg).unwrap();
-			gameData.opponent = deserializedMsg.oponent;
+			gameData.player = deserializedMsg.oponent;
 			gameData.pongball = deserializedMsg.pongball;
 		}
 
@@ -390,10 +394,6 @@ const LOCAL: &str = "127.0.0.1:25565";
 const DEFAULT_PORT: &str = "25565";
 const MSG_SIZE: usize = 2048;
 
-fn sleep() {
-    thread::sleep(::std::time::Duration::from_millis(100));
-}
-
 fn main() -> io::Result<()> {
 	let args: Vec<String> = env::args().collect();
 
@@ -402,11 +402,11 @@ fn main() -> io::Result<()> {
 	// or "cargo run port" to start the server 
 
 	//start the server
-	if (args.len() == 1) {
-		runServer();
+	if args.len() == 1 {
+		runServer()?;
 	}
-	if (args.len() == 2) {
-		runClient();
+	if args.len() == 2 {
+		runClient()?;
 	}
 	Ok(())
 }
