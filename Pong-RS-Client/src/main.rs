@@ -117,29 +117,29 @@ fn handle_events(gameData: &mut GameData, t_size: Rect, server: i32) -> io::Resu
 			}
 
 			//Player/Client Controls
-			if (server == 1) {
+			if (server == 0) {
 				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up {
-					if (gameData.player.y > 1) {
-						gameData.player.y -= 1;
+					if (gameData.opponent.y > 1) {
+						gameData.opponent.y -= 1;
 					}
 				}
 				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down {
-					if (gameData.player.y < t_size.height-gameData.player.height-1) {
-						gameData.player.y += 1;
+					if (gameData.opponent.y < t_size.height-gameData.opponent.height-1) {
+						gameData.opponent.y += 1;
 					}
 				}
 			}
 
 			//Player/Server Controls
-			if (server == 0) {
+			if (server == 1) {
 				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('w') {
-					if (gameData.opponent.y > 1) {
-						gameData.opponent.y -= 1;
+					if (gameData.player.y > 1) {
+						gameData.player.y -= 1;
 					}
 				}
 				if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('s') {
-					if (gameData.opponent.y < t_size.height-gameData.opponent.height-1) {
-						gameData.opponent.y += 1;
+					if (gameData.player.y < t_size.height-gameData.player.height-1) {
+						gameData.player.y += 1;
 					}
 				}
 			}
